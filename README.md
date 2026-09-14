@@ -1,10 +1,13 @@
 # WDTT Selective WireGuard Egress Router
 
-`wdtt-egress-router.sh` — управляющий скрипт для Linux-сервера с WDTT, который направляет интернет-трафик клиентов WDTT через отдельный WireGuard egress, не меняя основной маршрут самого VPS.
+`wdtt-egress-router.sh` — скрипт для выборочной маршрутизации интернет-трафика клиентов WDTT через отдельный WireGuard egress-сервер без изменения основного маршрута VPS.
 
-Проект предназначен для сценариев, где на одном сервере одновременно работают WDTT и другие сетевые сервисы — например, 3x-ui/VLESS, SSH, веб-сервисы или панели управления — и только трафик клиентов WDTT должен выходить в интернет через другой VPS.
+Это позволяет оставить SSH, 3x-ui/VLESS, веб-панели и другие сервисы на штатном интернет-канале сервера, а только сеть клиентов WDTT направить через другой VPS.
 
-Скрипт также умеет проверять и обновлять нативную systemd-установку WDTT до последнего стабильного релиза server core из [`XXcipherX/proxy-turn-vk-android`](https://github.com/XXcipherX/proxy-turn-vk-android).
+Скрипт управляет policy routing, scoped `iptables`-правилами и SNAT, восстанавливает маршрутизацию после рестарта WDTT, а также умеет проверять и обновлять нативную systemd-установку WDTT до последнего стабильного релиза server core из [`XXcipherX/proxy-turn-vk-android`](https://github.com/XXcipherX/proxy-turn-vk-android).
+
+**Репозиторий:** https://github.com/Jetvac/WDTT-Selective-WireGuard-Egress-Router  
+**Готовый скрипт:** https://github.com/Jetvac/WDTT-Selective-WireGuard-Egress-Router/releases/download/release/wdtt-egress-router.sh
 
 > Проект не связан с VK, XXcipherX, 3x-ui или WireGuard и не является их официальным компонентом.
 
@@ -248,30 +251,42 @@ wg show wg-de
 
 ## Установка
 
-Скопируйте скрипт в постоянный каталог:
+Рекомендуемый способ — скачать готовый `wdtt-egress-router.sh` из GitHub Releases и установить его в `/usr/local/sbin`.
 
 ```bash
-sudo install -m 0755 wdtt-egress-router.sh /usr/local/sbin/wdtt-egress-router.sh
+curl -fL   https://github.com/Jetvac/WDTT-Selective-WireGuard-Egress-Router/releases/download/release/wdtt-egress-router.sh   -o /tmp/wdtt-egress-router.sh
+
+bash -n /tmp/wdtt-egress-router.sh
+sudo install -m 0755 /tmp/wdtt-egress-router.sh /usr/local/sbin/wdtt-egress-router.sh
+rm -f /tmp/wdtt-egress-router.sh
 ```
 
-Проверьте доступные команды:
+Проверьте установку:
 
 ```bash
 sudo /usr/local/sbin/wdtt-egress-router.sh --help
 ```
 
-### Установка со стандартными параметрами
+Альтернативно можно клонировать репозиторий:
 
-Если используются:
-
-```text
-wg-de
-10.8.1.3
-wdtt0
-10.66.66.0/24
+```bash
+git clone https://github.com/Jetvac/WDTT-Selective-WireGuard-Egress-Router.git
+cd WDTT-Selective-WireGuard-Egress-Router
+sudo install -m 0755 wdtt-egress-router.sh /usr/local/sbin/wdtt-egress-router.sh
 ```
 
-достаточно выполнить:
+### Установка со стандартными параметрами
+
+Если используются значения по умолчанию:
+
+```text
+WireGuard interface:  wg-de
+WireGuard IPv4:       10.8.1.3
+WDTT interface:       wdtt0
+WDTT network:         10.66.66.0/24
+```
+
+выполните:
 
 ```bash
 sudo /usr/local/sbin/wdtt-egress-router.sh install
@@ -281,9 +296,9 @@ sudo /usr/local/sbin/wdtt-egress-router.sh install
 
 1. проверит наличие WireGuard и WDTT-интерфейсов;
 2. проверит WireGuard handshake;
-3. проверит, что основной трафик VPS не идёт через WireGuard;
-4. проверит конфликты routing table и priority `ip rule`;
-5. временно проверит интернет через WireGuard;
+3. проверит, что обычный трафик VPS не использует выбранный WireGuard-интерфейс;
+4. проверит конфликты policy-routing table и `ip rule`;
+5. проверит доступ в интернет через WireGuard;
 6. сохранит конфигурацию;
 7. установит systemd persistence;
 8. применит policy route, FORWARD и SNAT;
@@ -292,14 +307,7 @@ sudo /usr/local/sbin/wdtt-egress-router.sh install
 ### Установка с собственными параметрами
 
 ```bash
-sudo /usr/local/sbin/wdtt-egress-router.sh install \
-    --wg-if wg-de \
-    --wg-ip 10.8.1.3 \
-    --wdtt-if wdtt0 \
-    --wdtt-net 10.66.66.0/24 \
-    --probe-ip 10.66.66.2 \
-    --table 51888 \
-    --rule-pref 10666
+sudo /usr/local/sbin/wdtt-egress-router.sh install     --wg-if wg-de     --wg-ip 10.8.1.3     --wdtt-if wdtt0     --wdtt-net 10.66.66.0/24     --probe-ip 10.66.66.2     --table 51888     --rule-pref 10666
 ```
 
 Доступные параметры:
@@ -315,7 +323,27 @@ sudo /usr/local/sbin/wdtt-egress-router.sh install \
 | `--rule-pref NUMBER` | priority policy rule | `10666` |
 | `--skip-egress-test` | не выполнять предварительный интернет-тест WireGuard | выключено |
 
-`--skip-egress-test` рекомендуется использовать только для диагностики или в среде, где `api.ipify.org` недоступен намеренно.
+`--skip-egress-test` рекомендуется использовать только для диагностики или если `api.ipify.org` недоступен намеренно.
+
+### Обновление самого скрипта
+
+Чтобы заменить локальную копию на версию из опубликованного релиза:
+
+```bash
+curl -fL   https://github.com/Jetvac/WDTT-Selective-WireGuard-Egress-Router/releases/download/release/wdtt-egress-router.sh   -o /tmp/wdtt-egress-router.sh
+
+bash -n /tmp/wdtt-egress-router.sh
+sudo install -m 0755 /tmp/wdtt-egress-router.sh /usr/local/sbin/wdtt-egress-router.sh
+rm -f /tmp/wdtt-egress-router.sh
+```
+
+Сохранённая конфигурация в `/etc/wdtt-egress-router.conf` при этом не изменяется.
+
+После обновления рекомендуется проверить состояние:
+
+```bash
+sudo /usr/local/sbin/wdtt-egress-router.sh status
+```
 
 ## Команды
 
@@ -324,7 +352,7 @@ sudo /usr/local/sbin/wdtt-egress-router.sh install \
 Сохраняет конфигурацию, включает автоматическое применение и настраивает маршрутизацию:
 
 ```bash
-sudo wdtt-egress-router.sh install [options]
+sudo /usr/local/sbin/wdtt-egress-router.sh install [options]
 ```
 
 Команда идемпотентна и может использоваться повторно.
@@ -832,8 +860,10 @@ sudo /usr/local/sbin/wdtt-egress-router.sh update-wdtt
 sudo /usr/local/sbin/wdtt-egress-router.sh uninstall
 ```
 
-## Связанные проекты
+## Ссылки
 
-- [`XXcipherX/vkturn-vps-setup`](https://github.com/XXcipherX/vkturn-vps-setup) — установщики и документация по развёртыванию VK TURN proxy / WDTT.
-- [`XXcipherX/proxy-turn-vk-android`](https://github.com/XXcipherX/proxy-turn-vk-android) — WDTT client/server project; server core для Linux находится в `app/src/main/assets/linux-server`.
+- [`Jetvac/WDTT-Selective-WireGuard-Egress-Router`](https://github.com/Jetvac/WDTT-Selective-WireGuard-Egress-Router) — репозиторий этого проекта.
+- [Releases](https://github.com/Jetvac/WDTT-Selective-WireGuard-Egress-Router/releases) — опубликованные версии и готовый `wdtt-egress-router.sh`.
+- [`XXcipherX/vkturn-vps-setup`](https://github.com/XXcipherX/vkturn-vps-setup) — установщики и документация по развёртыванию WDTT/VK TURN proxy.
+- [`XXcipherX/proxy-turn-vk-android`](https://github.com/XXcipherX/proxy-turn-vk-android) — исходный проект WDTT; Linux server core находится в `app/src/main/assets/linux-server`.
 - [WireGuard](https://www.wireguard.com/) — VPN-туннель, используемый как отдельный egress.
